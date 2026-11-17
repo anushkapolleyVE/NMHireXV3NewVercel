@@ -50,31 +50,152 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# from .config import settings
+
+# cors_origins = [
+#     "http://localhost:5173",
+#     "http://localhost:5174",
+#     "http://localhost:3000",
+#     "https://nm-hire-x.vercel.app",
+#     "https://nm-hire-x-omega.vercel.app",
+#     "https://nm-hire-xv-2new.vercel.app",
+#     "https://nmhirexv3.vestaging.in",
+#     "https://nm-hire-xv-3-c4m5.vercel.app",
+# ]
+# if settings.FRONTEND_URL and settings.FRONTEND_URL not in cors_origins:
+#     cors_origins.append(settings.FRONTEND_URL.rstrip("/"))
+
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_origins=[
+#         "https://nmhirexv3.vestaging.in",
+#         "http://localhost:5173",
+#         "http://127.0.0.1:5173",
+#         "https://nm-hire-xv-3-c4m5.vercel.app",
+#     ],
+#     allow_credentials=True,
+#     allow_methods=["*"],
+#     allow_headers=["*"],
+# )
+
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from sqlalchemy import text
+
+from .api import router
+from .database import engine, ensure_ist_datetime_columns
+from .models import Base
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Create missing tables for a fresh development database.
+    Base.metadata.create_all(bind=engine)
+    if engine.dialect.name == "postgresql":
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "ALTER TABLE candidates ADD COLUMN IF NOT EXISTS requisition_id VARCHAR(255)"
+                )
+            )
+            conn.execute(
+                text(
+                    "CREATE INDEX IF NOT EXISTS ix_candidates_requisition_id ON candidates (requisition_id)"
+                )
+            )
+    ensure_ist_datetime_columns()
+    
+    import asyncio
+    from .scheduler import check_interview_reminders
+    
+    async def run_scheduler():
+        while True:
+            try:
+                # Run sync function in thread pool
+                await asyncio.to_thread(check_interview_reminders)
+            except Exception as e:
+                print(f"Scheduler error: {e}")
+            await asyncio.sleep(30) # Every 30 seconds
+            
+    task = asyncio.create_task(run_scheduler())
+    yield
+    task.cancel()
+
+
+app = FastAPI(
+    title="NM-HireX",
+    version="1.0.0",
+    lifespan=lifespan,
+)
+
+# from .config import settings
+
+# cors_origins = [
+#     "http://localhost:5173",
+#     "http://localhost:5174",
+#     "http://localhost:3000",
+#     "http://127.0.0.1:5173",
+#     "https://nm-hire-x.vercel.app",
+#     "https://nm-hire-x-omega.vercel.app",
+#     "https://nm-hire-xv-2new.vercel.app",
+#     "https://nmhirexv3.vestaging.in",
+#     "https://nm-hire-xv-3-c4m5.vercel.app",
+# ]
+# if settings.FRONTEND_URL and settings.FRONTEND_URL not in cors_origins:
+#     cors_origins.append(settings.FRONTEND_URL.rstrip("/"))
+
+# app.add_middleware(
+#     CORSMiddleware,
+#     allow_origins=cors_origins,
+#     allow_origin_regex=r"https://.*\.vercel\.app",
+#     allow_credentials=True,
+#     allow_methods=["*"],
+#     allow_headers=["*"],
+# )
+
+
 from .config import settings
 
 cors_origins = [
     "http://localhost:5173",
     "http://localhost:5174",
     "http://localhost:3000",
+    "http://127.0.0.1:5173",
+
     "https://nm-hire-x.vercel.app",
     "https://nm-hire-x-omega.vercel.app",
     "https://nm-hire-xv-2new.vercel.app",
-    "https://nmhirexv3.vestaging.in"
+    "https://nmhirexv3.vestaging.in",
+    "https://nm-hire-xv-3-c4m5.vercel.app",
 ]
-if settings.FRONTEND_URL and settings.FRONTEND_URL not in cors_origins:
-    cors_origins.append(settings.FRONTEND_URL.rstrip("/"))
+
+# Add the frontend URL from Render environment variables
+if settings.FRONTEND_URL:
+    frontend_url = settings.FRONTEND_URL.rstrip("/")
+    if frontend_url not in cors_origins:
+        cors_origins.append(frontend_url)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "https://nmhirexv3.vestaging.in",
-        "http://localhost:5173",
-        "http://127.0.0.1:5173",
-    ],
+    allow_origins=cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+app.include_router(router)
+
+
+@app.api_route("/", methods=["GET", "HEAD"])
+def root():
+    return {
+        "service": "NM-HireX",
+        "status": "running",
+    }
+
 
 app.include_router(router)
 

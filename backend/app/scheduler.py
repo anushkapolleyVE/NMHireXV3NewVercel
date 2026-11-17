@@ -106,9 +106,9 @@ def check_interview_reminders():
             teams_part = f"\nInterview Link: {interview_link_display}" if interview_link_display else ""
 
             # Resolve public frontend URL for candidate reschedule link
-            frontend_url = getattr(settings, 'FRONTEND_URL', 'https://nmhirexv3.vestaging.in').rstrip('/')
+            frontend_url = getattr(settings, 'FRONTEND_URL', 'https://nm-hire-xv-3-c4m5.vercel.app').rstrip('/')
             if not frontend_url or "localhost" in frontend_url or "127.0.0.1" in frontend_url:
-                frontend_url = "https://nmhirexv3.vestaging.in"
+                frontend_url = "https://nm-hire-xv-3-c4m5.vercel.app"
 
             # ----------------------------------------------------
             # 1. EXACTLY 24 HOURS BEFORE INTERVIEW

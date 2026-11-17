@@ -704,11 +704,11 @@ def _send_whatsapp_cta_message(
     frontend_url = getattr(
         settings,
         "FRONTEND_URL",
-        "https://nmhirexv3.vestaging.in",
+        "https://nm-hire-xv-3-c4m5.vercel.app",
     ).rstrip("/")
 
     if not frontend_url or "localhost" in frontend_url or "127.0.0.1" in frontend_url:
-        frontend_url = "https://nmhirexv3.vestaging.in"
+        frontend_url = "https://nm-hire-xv-3-c4m5.vercel.app"
     scheduling_link = (
         f"{frontend_url}/schedule/{job_candidate_id}"
     )
@@ -1396,9 +1396,9 @@ def schedule_candidate_interview(
     candidate = db.get(Candidate, job_candidate.candidate_id)
 
     date_text = scheduled_at.strftime("%d %b %Y, %I:%M %p")
-    frontend_url = getattr(settings, 'FRONTEND_URL', 'https://nmhirexv3.vestaging.in').rstrip('/')
+    frontend_url = getattr(settings, 'FRONTEND_URL', 'https://nm-hire-xv-3-c4m5.vercel.app').rstrip('/')
     if not frontend_url or "localhost" in frontend_url or "127.0.0.1" in frontend_url:
-        frontend_url = "https://nmhirexv3.vestaging.in"
+        frontend_url = "https://nm-hire-xv-3-c4m5.vercel.app"
     
     if is_reschedule:
         message = (
@@ -2602,3 +2602,4 @@ def send_pending_outreach_candidates(
         "skipped": skipped_count,
         "results": results,
     }
+
