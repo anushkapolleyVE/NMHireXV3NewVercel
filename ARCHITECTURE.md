@@ -448,7 +448,7 @@ The table input mirrors the `/send-array` schema exactly:
 | `NMHIREX_API_KEY` | Alias for Key 2 | same as above |
 | `NMHIREX_GATEWAY_TIMEOUT_SECONDS` | Gateway HTTP timeout | `25` |
 | `NMHIREX_DEFAULT_REQUISITION_ID` | Fallback integer requisition ID | `506` |
-| `FRONTEND_URL` | CORS allow-origin | `https://your-frontend.vercel.app` |
+| `FRONTEND_URL` | CORS allow-origin | `https://your-frontend..app` |
 | `WEBHOOK_SECRET` | Optional secret for webhook verification | `random_string` |
 
 ### Frontend (`frontend/.env`)
