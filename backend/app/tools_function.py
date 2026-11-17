@@ -261,7 +261,7 @@ def get_job_candidates(
             "experience_years": (
                 float(candidate.total_experience_years)
                 if candidate.total_experience_years is not None
-                else None
+                else None 
             ),
             "current_company": candidate.current_company,
             "current_role": candidate.current_role,
@@ -3103,7 +3103,7 @@ def send_pending_outreach_candidates(
 
         name = candidate.name or "Candidate"
         role = candidate.current_role or (job.title if job else "the position")
-        company = candidate.current_company or default_company
+        company = default_company or "Virtual Employee Pvt Ltd"
 
         reference_id = f"NMHireX-{str(jc.id)}"
         payload = {
