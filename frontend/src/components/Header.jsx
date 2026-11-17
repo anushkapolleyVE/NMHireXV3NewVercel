@@ -4,40 +4,24 @@ import { useState, useEffect } from 'react';
 export default function Header({ showNav = true }) {
   const location = useLocation();
   const [userName, setUserName] = useState('User');
-  const [isAdmin, setIsAdmin] = useState(false);
 
   useEffect(() => {
-    const role = localStorage.getItem('userRole');
     const name = localStorage.getItem('userName');
-    
-    if (role === 'ADMIN' || role === 'admin') {
-      setUserName('Admin');
-      setIsAdmin(true);
-    } else if (name) {
+    if (name) {
       setUserName(name);
     }
   }, []);
 
   const firstLetter = userName ? userName.charAt(0).toUpperCase() : 'U';
 
-  const navItems = isAdmin 
-    ? [
-        { name: 'Dashboard', path: '/dashboard' },
-        { name: 'Send Outreach', path: '/outreach/send' },
-        { name: 'Pending Outreach', path: '/outreach/pending' },
-        { name: 'Outreach Responses', path: '/outreach' },
-        { name: 'Candidates', path: '/candidates' },
-        { name: 'WhatsApp Gateway', path: '/whatsapp-gateway' },
-        { name: 'Recruiters', path: '/admin' }
-      ]
-    : [
-        { name: 'Dashboard', path: '/dashboard' },
-        { name: 'Send Outreach', path: '/outreach/send' },
-        { name: 'Pending Outreach', path: '/outreach/pending' },
-        { name: 'Outreach Responses', path: '/outreach' },
-        { name: 'Candidates', path: '/candidates' },
-        { name: 'WhatsApp Gateway', path: '/whatsapp-gateway' },
-      ];
+  const navItems = [
+    { name: 'Dashboard', path: '/dashboard' },
+    { name: 'Send Outreach', path: '/outreach/send' },
+    { name: 'Pending Outreach', path: '/outreach/pending' },
+    { name: 'Outreach Responses', path: '/outreach' },
+    { name: 'Candidates', path: '/candidates' },
+    { name: 'WhatsApp Gateway', path: '/whatsapp-gateway' },
+  ];
 
 
   return (

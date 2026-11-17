@@ -6,15 +6,11 @@ const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || 'http://localhost:800
 
 export default function Login() {
   const navigate = useNavigate();
-
-  const [loginType, setLoginType] = useState('recruiter'); // 'admin' or 'recruiter'
   
   // Recruiter fields
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   
-  // Admin fields
-  const [userId, setUserId] = useState('');
   const [password, setPassword] = useState('');
 
   const [loading, setLoading] = useState(false);
@@ -27,60 +23,32 @@ export default function Login() {
     setError('');
 
     try {
-      if (loginType === 'admin') {
-        // Admin Login Logic
-        const formData = new URLSearchParams();
-        formData.append('username', userId);
-        formData.append('password', password);
+      // Recruiter Login Logic
+      const formData = new URLSearchParams();
+      formData.append('username', email);
+      formData.append('password', password);
 
-        const response = await fetch(`${API_BASE_URL}/auth/login`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-          },
-          body: formData,
-        });
+      const response = await fetch(`${API_BASE_URL}/auth/login`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+        },
+        body: formData,
+      });
 
-        const data = await response.json();
+      const data = await response.json();
 
-        if (!response.ok) {
-          throw new Error(data.detail || 'Invalid admin credentials');
-        }
-
-        localStorage.setItem('accessToken', data.access_token);
-        localStorage.setItem('userId', data.user.id);
-        localStorage.setItem('userName', data.user.name);
-        localStorage.setItem('userRole', 'ADMIN');
-
-        navigate('/admin');
-      } else {
-        // Recruiter Login Logic
-        const formData = new URLSearchParams();
-        formData.append('username', email);
-        formData.append('password', password);
-
-        const response = await fetch(`${API_BASE_URL}/auth/login`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/x-www-form-urlencoded',
-          },
-          body: formData,
-        });
-
-        const data = await response.json();
-
-        if (!response.ok) {
-          throw new Error(data.detail || 'Login failed.');
-        }
-
-        localStorage.setItem('accessToken', data.access_token);
-        localStorage.setItem('userId', data.user.id);
-        localStorage.setItem('userName', data.user.name);
-        localStorage.setItem('userEmail', data.user.email);
-        localStorage.setItem('userRole', data.user.role);
-        
-        navigate('/dashboard');
+      if (!response.ok) {
+        throw new Error(data.detail || 'Login failed.');
       }
+
+      localStorage.setItem('accessToken', data.access_token);
+      localStorage.setItem('userId', data.user.id);
+      localStorage.setItem('userName', data.user.name);
+      localStorage.setItem('userEmail', data.user.email);
+      localStorage.setItem('userRole', data.user.role);
+      
+      navigate('/dashboard');
     } catch (err) {
       setError(err.message || 'Login failed. Please try again.');
     } finally {
@@ -169,9 +137,9 @@ export default function Login() {
 
             <div className="glass-dark relative z-10 rounded-[24px] p-8 sm:p-10 border border-slate-700/50">
               <div className="mb-6 flex items-center gap-2.5">
-                <span className={`size-2 rounded-full ${loginType === 'admin' ? 'bg-purple-500 shadow-[0_0_10px_rgba(168,85,247,0.8)]' : 'bg-brand shadow-[0_0_10px_rgba(59,130,246,0.8)]'}`}></span>
+                <span className="size-2 rounded-full bg-brand shadow-[0_0_10px_rgba(59,130,246,0.8)]"></span>
                 <p className="text-xs font-bold uppercase tracking-[0.15em] text-slate-400">
-                  {loginType === 'admin' ? 'Admin Access' : 'Recruiter Access'}
+                  Recruiter Access
                 </p>
               </div>
 
@@ -179,101 +147,38 @@ export default function Login() {
                 Welcome back
               </h2>
 
-              {/* ROLE TOGGLE */}
-              <div className="flex rounded-xl bg-slate-800/80 p-1 mb-6 ring-1 ring-slate-700">
-                <button
-                  type="button"
-                  onClick={() => { setLoginType('recruiter'); setError(''); }}
-                  className={`flex-1 rounded-lg py-2 text-xs font-bold transition-all ${
-                    loginType === 'recruiter' 
-                      ? 'bg-slate-700 text-white shadow-sm ring-1 ring-slate-600' 
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  Recruiter
-                </button>
-                <button
-                  type="button"
-                  onClick={() => { setLoginType('admin'); setError(''); }}
-                  className={`flex-1 rounded-lg py-2 text-xs font-bold transition-all ${
-                    loginType === 'admin' 
-                      ? 'bg-slate-700 text-white shadow-sm ring-1 ring-slate-600' 
-                      : 'text-slate-400 hover:text-slate-200'
-                  }`}
-                >
-                  Admin
-                </button>
-              </div>
-
               <form onSubmit={handleSubmit} className="space-y-5">
 
-                {loginType === 'recruiter' ? (
-                  <>
-                    {/* EMAIL */}
-                    <div>
-                      <label htmlFor="email" className="mb-2 block text-xs font-bold text-slate-300">
-                        Work email
-                      </label>
-                      <input
-                        id="email"
-                        type="email"
-                        placeholder="recruiter@company.com"
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                        required
-                        className="input-dark w-full rounded-xl px-4 py-3.5 text-sm placeholder:text-slate-600"
-                      />
-                    </div>
-                    {/* PASSWORD */}
-                    <div>
-                      <label htmlFor="password" className="mb-2 block text-xs font-bold text-slate-300">
-                        Password
-                      </label>
-                      <input
-                        id="password"
-                        type="password"
-                        placeholder="••••••••"
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        required
-                        className="input-dark w-full rounded-xl px-4 py-3.5 text-sm placeholder:text-slate-600"
-                      />
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    {/* USER ID */}
-                    <div>
-                      <label htmlFor="userid" className="mb-2 block text-xs font-bold text-slate-300">
-                        Admin User ID
-                      </label>
-                      <input
-                        id="userid"
-                        type="text"
-                        placeholder="admin_id"
-                        value={userId}
-                        onChange={(e) => setUserId(e.target.value)}
-                        required
-                        className="input-dark w-full rounded-xl px-4 py-3.5 text-sm placeholder:text-slate-600"
-                      />
-                    </div>
-                    {/* PASSWORD */}
-                    <div>
-                      <label htmlFor="password" className="mb-2 block text-xs font-bold text-slate-300">
-                        Password
-                      </label>
-                      <input
-                        id="password"
-                        type="password"
-                        placeholder="••••••••"
-                        value={password}
-                        onChange={(e) => setPassword(e.target.value)}
-                        required
-                        className="input-dark w-full rounded-xl px-4 py-3.5 text-sm placeholder:text-slate-600"
-                      />
-                    </div>
-                  </>
-                )}
+                {/* EMAIL */}
+                <div>
+                  <label htmlFor="email" className="mb-2 block text-xs font-bold text-slate-300">
+                    Work email
+                  </label>
+                  <input
+                    id="email"
+                    type="email"
+                    placeholder="recruiter@company.com"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    required
+                    className="input-dark w-full rounded-xl px-4 py-3.5 text-sm placeholder:text-slate-600"
+                  />
+                </div>
+                {/* PASSWORD */}
+                <div>
+                  <label htmlFor="password" className="mb-2 block text-xs font-bold text-slate-300">
+                    Password
+                  </label>
+                  <input
+                    id="password"
+                    type="password"
+                    placeholder="••••••••"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    required
+                    className="input-dark w-full rounded-xl px-4 py-3.5 text-sm placeholder:text-slate-600"
+                  />
+                </div>
 
                 {/* ERROR */}
                 {error && (
@@ -290,21 +195,19 @@ export default function Login() {
                 >
                   {loading ? 'Signing in...' : (
                     <>
-                      Sign in as {loginType === 'admin' ? 'Admin' : 'Recruiter'}
+                      Sign in
                       <span className="transition-transform group-hover:translate-x-1">→</span>
                     </>
                   )}
                 </button>
               </form>
 
-              {loginType === 'recruiter' && (
-                <div className="mt-6 text-center text-sm text-slate-400">
-                  Don't have an account?{' '}
-                  <Link to="/register" className="font-semibold text-brand hover:text-brand-soft">
-                    Apply for access
-                  </Link>
-                </div>
-              )}
+              <div className="mt-6 text-center text-sm text-slate-400">
+                Don't have an account?{' '}
+                <Link to="/register" className="font-semibold text-brand hover:text-brand-soft">
+                  Register
+                </Link>
+              </div>
             </div>
           </section>
 

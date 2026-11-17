@@ -1,26 +1,3 @@
-"""NM-HireX Core Business Operations & WhatsApp Recruitment Pipeline Engine.
-
-This module houses the core deterministic business logic powering the recruitment lifecycle:
-1. Candidate Array Ingestion & Outreach Routing:
-   - `send_naukri_outreach_array`: Ingests candidate batches, upserts entities, and routes either
-     to instant WhatsApp delivery (`automate="yes"`) or to the pending outreach queue (`automate="no"`).
-   - `get_pending_outreach_candidates` & `send_pending_outreach_candidates`: Supports recruiter-driven
-     selective manual outreach for queued candidates on the `/outreach/pending` frontend portal.
-2. WhatsApp Messaging & Transport (Key 1):
-   - `_send_whatsapp_payload`, `_send_whatsapp_to_candidate`, `_send_whatsapp_text_message`: Low-level
-     HTTP dispatch via Key 1 (`WHATSAPP_MESSAGE_API_KEY`) to NMVE WhatsApp gateway with test mode guards.
-   - `_clean_whatsapp_phone`: Strict E.164 normalization for Indian phone numbers (10 digits / 12 digits starting with 91).
-   - `_send_whatsapp_cta_message`: Automated delivery of personalized candidate scheduling links.
-3. Webhook Ingestion & NLP Intent Classification:
-   - `handle_whatsapp_webhook`: Processes inbound candidate replies from NMVE webhooks.
-   - `_classify_whatsapp_response`: Deterministic regex intent parsing ('INTERESTED', 'NOT_INTERESTED', 'UNKNOWN').
-4. Interview Scheduling & Token Management:
-   - `schedule_candidate_interview`: Stores selected time slot, generates single-use `reschedule_token`,
-     sets interview link (redirects to Teckvalley test portal), and dispatches WhatsApp confirmation.
-5. Recruiter Analytics & Queries:
-   - `get_user_dashboard`, `get_outreach_candidates`, `get_all_candidates`, `get_job_candidates`:
-     Powers recruiter and admin dashboards with live pipeline metrics and candidate logs.
-"""
 import json
 import logging
 import os
@@ -57,7 +34,6 @@ WHATSAPP_STAGE_NUMBERS = [
 
 IST_ZONE = ZoneInfo("Asia/Kolkata")
 
-
 def _to_naive_ist(dt: datetime) -> datetime:
     """Normalize a datetime to naive IST (Asia/Kolkata) wall-clock time."""
     if dt.tzinfo is not None:
@@ -72,26 +48,8 @@ def _to_naive_ist(dt: datetime) -> datetime:
 def get_job_candidates(
     db: Session,
     job_id: UUID,
-    limit: int = 10,
+    limit: int = 50,
 ) -> list[dict]:
-    """Retrieve ranked and shortlisted candidates associated with a specific job requisition.
-
-    Detailed Functionality:
-    - Queries `job_candidates` joined with `candidates` filtered by `job_id` and `is_shortlisted=True`.
-    - Orders candidates ascending by `ranking_position` (rank 1 first).
-    - Fetches the latest uploaded resume for each candidate (if present).
-    - Classifies candidate fit based on `overall_score` (>=85: STRONG, >=70: MODERATE, else: LOW).
-    - Formats contact history, interview status, resume metadata, and structured score breakdown.
-
-    Parameters:
-        db (Session): Active SQLAlchemy database session.
-        job_id (UUID): Unique identifier of the target Job.
-        limit (int): Maximum number of top ranked candidates to return (default: 10).
-
-    Returns:
-        list[dict]: Array of structured candidate profiles including ranking, scores,
-                    contact details, recruitment status, and resume links.
-    """
     rows = db.execute(
         select(JobCandidate, Candidate)
         .join(
@@ -100,295 +58,60 @@ def get_job_candidates(
         )
         .where(
             JobCandidate.job_id == job_id,
-            JobCandidate.is_shortlisted.is_(True),
         )
         .order_by(
-            JobCandidate.ranking_position.asc()
+            JobCandidate.created_at.desc(),
         )
+        .limit(limit)
     ).all()
 
-    candidate_ids = [
-        candidate.id
-        for _, candidate in rows[:limit]
-    ]
-
-    resumes = {}
-    if candidate_ids:
-        all_resumes = db.execute(
-            select(Resume)
-            .where(Resume.candidate_id.in_(candidate_ids))
-            .order_by(Resume.uploaded_at.desc())
-        ).scalars().all()
-
-        for resume in all_resumes:
-            if resume.candidate_id not in resumes:
-                resumes[resume.candidate_id] = resume
-
-    # Load old detailed screening records only when they exist.
-    screening_map = {}
-    jc_ids = [
-        jc.id
-        for jc, _ in rows[:limit]
-    ]
-
-    if jc_ids:
-        screenings = db.execute(
-            select(ScreeningResult)
-            .where(
-                ScreeningResult.job_candidate_id.in_(jc_ids)
-            )
-        ).scalars().all()
-
-        screening_map = {
-            screening.job_candidate_id: screening
-            for screening in screenings
-        }
-
     results = []
-
-    for jc, candidate in rows[:limit]:
-        screening = screening_map.get(jc.id)
-
-        external_score = (
-            float(jc.overall_score)
-            if jc.overall_score is not None
-            else None
-        )
-
-        score = (
-            external_score
-            if external_score is not None
-            else (
-                float(screening.total_score)
-                if screening and screening.total_score is not None
-                else 0
-            )
-        )
-
-        classification = (
-            jc.classification
-            or (
-                screening.classification
-                if screening
-                else None
-            )
-            or "External Match"
-        )
-
-        score_breakdown = None
-
-        if screening:
-            mandatory = float(screening.mandatory_skills_score or 0)
-            experience = float(screening.experience_score or 0)
-            domain = float(screening.domain_score or 0)
-            preferred = float(screening.preferred_skills_score or 0)
-            education = float(screening.education_score or 0)
-            location = float(screening.location_score or 0)
-            availability = float(screening.availability_score or 0)
-            other = float(screening.other_requirements_score or 0)
-
-            score_breakdown = {
-                "mandatory_skills": {
-                    "score": mandatory,
-                    "max_score": 30,
-                    "percentage": round((mandatory / 30) * 100),
-                },
-                "experience": {
-                    "score": experience,
-                    "max_score": 25,
-                    "percentage": round((experience / 25) * 100),
-                },
-                "domain": {
-                    "score": domain,
-                    "max_score": 15,
-                    "percentage": round((domain / 15) * 100),
-                },
-                "preferred_skills": {
-                    "score": preferred,
-                    "max_score": 10,
-                    "percentage": round((preferred / 10) * 100),
-                },
-                "education": {
-                    "score": education,
-                    "max_score": 5,
-                    "percentage": round((education / 5) * 100),
-                },
-                "location": {
-                    "score": location,
-                    "max_score": 5,
-                    "percentage": round((location / 5) * 100),
-                },
-                "availability": {
-                    "score": availability,
-                    "max_score": 5,
-                    "percentage": round((availability / 5) * 100),
-                },
-                "other_requirements": {
-                    "score": other,
-                    "max_score": 5,
-                    "percentage": round((other / 5) * 100),
-                },
-            }
-        else:
-            score_breakdown = {
-                "external_match_score": {
-                    "score": score,
-                    "max_score": 100,
-                    "percentage": score,
-                }
-            }
-
-        reasoning = None
-        if screening and screening.matching_details:
-            reasoning = screening.matching_details.get(
-                "evaluation"
-            )
-
-        resume = resumes.get(candidate.id)
-
+    for jc, candidate in rows:
         results.append({
-            "rank": jc.ranking_position,
-            "candidate_id": str(candidate.id),
             "job_candidate_id": str(jc.id),
-            "name": candidate.name,
-            "email": candidate.email,
-            "phone": candidate.phone,
-            "resume_url": (
-                resume.file_url
-                if resume
-                else None
-            ),
-            "experience_years": (
+            "candidate_id": str(candidate.id),
+            "user_name": candidate.name or "",
+            "name": candidate.name or "",
+            "email": candidate.email or "",
+            "phone_no": candidate.phone or "",
+            "phone": candidate.phone or "",
+            "current_company": candidate.current_company or "",
+            "company": candidate.current_company or "",
+            "job_role": candidate.current_role or "",
+            "role": candidate.current_role or "",
+            "experience": (
                 float(candidate.total_experience_years)
                 if candidate.total_experience_years is not None
                 else None
             ),
-            "current_company": candidate.current_company,
-            "current_role": candidate.current_role,
-            "location": candidate.location,
-            "notice_period_days": candidate.notice_period_days,
-            "skills": (
-                candidate.normalized_profile.get("skills", [])
-                if candidate.normalized_profile
-                else []
-            ),
-            "experience_details": (
-                candidate.normalized_profile.get("experiences", [])
-                if candidate.normalized_profile
-                else []
-            ),
-            "score": score,
-            "external_score": external_score,
-            "classification": classification,
+            "requisition_id": jc.requisition_id or candidate.requisition_id or "",
             "status": jc.recruitment_status,
-            "score_breakdown": score_breakdown,
-            "reasoning": reasoning,
+            "recruitment_status": jc.recruitment_status,
+            "interview_scheduled_at": (
+                jc.interview_scheduled_at.isoformat()
+                if jc.interview_scheduled_at
+                else None
+            ),
+            "interview_link": jc.interview_link,
+            "registration_url": jc.registration_url,
+            "created_at": jc.created_at.isoformat() if jc.created_at else None,
         })
 
     return results
 
 def get_user_jobs(db: Session, user_id: UUID) -> list[dict]:
-    """Retrieve all job requisitions created by a specific recruiter or user.
-
-    Parameters:
-        db (Session): Active SQLAlchemy database session.
-        user_id (UUID): ID of the recruiter/user whose jobs are being queried.
-
-    Returns:
-        list[dict]: List of job description dictionaries containing title, description,
-                    location, work mode, and creation timestamp.
-    """
     jobs = db.scalars(select(Job).where(Job.created_by == user_id).order_by(Job.created_at.desc())).all()
     return [{"job_id": str(j.id), "id": str(j.id), "title": j.title, "description": j.description, "location": j.location, "work_mode": j.work_mode, "file_name": None, "status": j.status,
              "created_at": j.created_at.isoformat() if j.created_at else None} for j in jobs]
 
 
 def get_user_job_candidates(db: Session, user_id: UUID, job_id: UUID) -> list[dict]:
-    """Retrieve top shortlisted candidates for a job, verifying recruiter ownership.
-
-    Detailed Functionality:
-    - Verifies that the requested `job_id` was created by `user_id`.
-    - If unauthorized, raises `PermissionError`.
-    - Calls `get_job_candidates` with limit 50.
-
-    Parameters:
-        db (Session): Active SQLAlchemy database session.
-        user_id (UUID): Authenticated user ID.
-        job_id (UUID): Job requisition ID.
-
-    Returns:
-        list[dict]: Ranked candidate profiles.
-
-    Raises:
-        PermissionError: If the job does not belong to the user.
-    """
     if not db.scalar(select(Job.id).where(Job.id == job_id, Job.created_by == user_id)):
         raise PermissionError("Job does not belong to current user")
     return get_job_candidates(db, job_id, limit=50)
 
 
-def get_admin_jobs(db: Session) -> list[dict]:
-    """Retrieve all system job requisitions with uploader metadata and top candidate previews.
-
-    Detailed Functionality:
-    - Joins `jobs` and `users` to identify who created each requisition.
-    - Embeds a preview list of top 10 ranked candidates for each job.
-
-    Parameters:
-        db (Session): Active SQLAlchemy database session.
-
-    Returns:
-        list[dict]: Full catalog of jobs including uploader details and candidate previews.
-    """
-    rows = db.execute(select(Job, User).join(User, User.id == Job.created_by).order_by(Job.created_at.desc())).all()
-    return [{"job_id": str(j.id), "title": j.title, "file_name": None, "status": j.status,
-             "uploaded_by": {"id": str(u.id), "name": u.name, "email": u.email},
-             "top_10": get_job_candidates(db, j.id)} for j, u in rows]
-
-
-def get_admin_job_candidates(db: Session, job_id: UUID) -> list[dict]:
-    """Admin endpoint to retrieve all ranked candidates for any job in the system.
-
-    Parameters:
-        db (Session): Active SQLAlchemy database session.
-        job_id (UUID): Target job requisition ID.
-
-    Returns:
-        list[dict]: Ranked candidate profiles.
-
-    Raises:
-        ValueError: If job_id is not found in the database.
-    """
-    if not db.get(Job, job_id):
-        raise ValueError("Job not found")
-    return get_job_candidates(db, job_id)
-
-
 def get_user_dashboard(db: Session, user_id: UUID) -> dict:
-    """Compute aggregate recruiter metrics, WhatsApp outreach statistics, and recent candidates.
-
-    Detailed Functionality:
-    - Verifies user existence.
-    - Queries all candidate-job associations across the pipeline.
-    - Tallies candidate counts across all recruitment lifecycle stages:
-      * invites_sent: Candidates with status CONTACTED, INTERESTED, SCHEDULED, etc.
-      * interested: Candidates who expressed positive intent.
-      * meeting_scheduled: Confirmed interview bookings.
-      * not_interested: Declined or opted out candidates.
-      * awaiting: Contacted but awaiting candidate response.
-      * delivered / failed / skipped metrics.
-    - Compiles a sorted timeline of recent candidate interactions.
-
-    Parameters:
-        db (Session): Active SQLAlchemy database session.
-        user_id (UUID): Authenticated recruiter user ID.
-
-    Returns:
-        dict: Recruiter dashboard KPIs and candidate activity feed.
-
-    Raises:
-        ValueError: If user_id is not found.
-    """
     user = db.get(User, user_id)
     if not user:
         raise ValueError("User not found")
@@ -429,7 +152,6 @@ def get_user_dashboard(db: Session, user_id: UUID) -> dict:
         }
 
         if has_outreach:
-            # Determine delivery status from latest outbound contact log FIRST
             latest_contact = db.scalar(
                 select(CandidateContact)
                 .where(
@@ -450,7 +172,6 @@ def get_user_dashboard(db: Session, user_id: UUID) -> dict:
                 display_status = "FAILED"
                 failed_count += 1
             else:
-                # Any outreach message successfully sent is DELIVERED and increments delivered_count
                 delivery_status = "DELIVERED"
                 display_status = status
                 delivered_count += 1
@@ -466,7 +187,6 @@ def get_user_dashboard(db: Session, user_id: UUID) -> dict:
             elif status == "NOT_INTERESTED":
                 not_interested += 1
             elif status == "CONTACTED":
-                # Only count as awaiting reply if the outreach message did NOT fail to send/deliver
                 if delivery_status not in {"FAILED", "INVALID_PHONE"}:
                     awaiting += 1
 
@@ -517,76 +237,27 @@ def get_user_dashboard(db: Session, user_id: UUID) -> dict:
         "pipeline": recent_candidates,
     }
 
-
-# ============================================================
-# LOW-LEVEL WHATSAPP TRANSPORT & PHONE SANITIZATION HELPERS
-# ============================================================
-
 def _clean_whatsapp_phone(raw_phone: str | None) -> str:
-    """Normalize and strictly validate an Indian mobile phone number for WhatsApp delivery.
-
-    Validation Rules & Specification:
-    - Strips all non-digit characters (spaces, dashes, plus signs, brackets).
-    - If leading zero is present (e.g. 09876543210), strips leading zeros.
-    - If number starts with country code '91':
-      * Must be exactly 12 digits total.
-      * The first digit of the mobile number (position index 2) must be 6, 7, 8, or 9.
-      * If length is not exactly 12, it is treated as an incomplete number and rejected (returns "").
-    - If number does NOT start with '91':
-      * Must be exactly 10 digits total.
-      * The first digit must be 6, 7, 8, or 9.
-      * Automatically prepends '91' to form a valid 12-digit E.164-compatible Indian mobile number.
-    - Any other length, prefix, or invalid string format returns "" (rejected).
-
-    Parameters:
-        raw_phone (str | None): Input phone string in any arbitrary format.
-
-    Returns:
-        str: 12-digit normalized phone number starting with '91', or empty string if invalid.
-    """
     if not raw_phone:
         return ""
 
     clean_phone = "".join(filter(str.isdigit, str(raw_phone)))
-
-    # Strip leading 0 if present (e.g. 0XXXXXXXXXX or 091XXXXXXXXXX)
     if clean_phone.startswith("0"):
         clean_phone = clean_phone.lstrip("0")
-
-    # If it starts with country code 91:
     if clean_phone.startswith("91"):
-        # Must be exactly 12 digits, and the mobile number (digits after 91) must start with 6, 7, 8, or 9
         if len(clean_phone) == 12 and clean_phone[2] in "6789":
             return clean_phone
-        # If it starts with 91 but does not have exactly 10 digits after 91 (e.g. 91 + 8 digits = 10 digits),
-        # it is an incomplete number and must NOT have another 91 prepended.
         return ""
-
-    # If without country code 91:
-    # Must be exactly 10 digits and start with 6, 7, 8, or 9
     if len(clean_phone) == 10 and clean_phone[0] in "6789":
         return "91" + clean_phone
-
-    # Invalid phone length or format
     return ""
 
 
 def _whatsapp_headers() -> dict:
-    """Construct HTTP authorization and content headers for the NMVE WhatsApp messaging API.
-
-    Detailed Functionality:
-    - Resolves Key 1 (`WHATSAPP_MESSAGE_API_KEY` or `WHATSAPP_API_KEY`) from environment or settings.
-    - Injects `Bearer <api_key>` into the `Authorization` header and sets `api-key` header.
-    - Note: This is Key 1 (Messaging), strictly distinct from Key 2 (Gateway).
-
-    Returns:
-        dict: Headers dictionary with Content-Type, Accept, and authentication credentials.
-    """
     headers = {
         "Content-Type": "application/json",
         "Accept": "application/json",
     }
-
     api_key = (
         getattr(settings, "WHATSAPP_MESSAGE_API_KEY", "")
         or getattr(settings, "WHATSAPP_API_KEY", "")
@@ -601,19 +272,6 @@ def _whatsapp_headers() -> dict:
 
 
 def _extract_provider_message_id(response_body: str | dict | None) -> str | None:
-    """Recursively search for and extract the upstream message ID from a provider response payload.
-
-    Detailed Functionality:
-    - Scans top-level and nested dictionary keys ('messageId', 'message_id', 'externalMessageId',
-      'external_message_id', 'id') inside 'data', 'result', or 'message' containers.
-    - Ensures provider ID tracing is preserved even if the external gateway modifies response wrappers.
-
-    Parameters:
-        response_body (str | dict | None): Raw or parsed JSON response from the messaging provider.
-
-    Returns:
-        str | None: Extracted message ID string, or None if not found.
-    """
     if isinstance(response_body, dict):
         for key in (
             "messageId",
@@ -635,51 +293,24 @@ def _extract_provider_message_id(response_body: str | dict | None) -> str | None
 
     return None
 
-
 def _send_whatsapp_payload(
     payload: dict,
 ) -> tuple[bool, dict | None, str | None]:
-    """Execute low-level HTTP dispatch of a WhatsApp payload (template or plain text) to NMVE.
-
-    Detailed Functionality:
-    - Routes templates to `/template-messages` and plain text to `/messages` endpoints.
-    - Test Mode Enforcement:
-      * When `WHATSAPP_TEST_MODE=True`, destination phone is forced to `WHATSAPP_TEST_NUMBER`.
-      * If test mode is enabled but test number is missing/invalid, safely blocks dispatch.
-    - Dispatches HTTP POST with a 20-second timeout.
-    - Extracts `provider_message_id` on success.
-    - Returns delivery status tuple.
-
-    Parameters:
-        payload (dict): Ready-to-send JSON dictionary adhering to NMVE WhatsApp specifications.
-
-    Returns:
-        tuple[bool, dict | None, str | None]:
-            - success (bool): True if HTTP 2xx and valid response received.
-            - parsed_response (dict | None): Parsed JSON response body.
-            - provider_message_id (str | None): Upstream message ID string.
-    """
-
     base_url = getattr(
         settings,
         "WHATSAPP_BASE_URL",
         "https://nmve.io/whatsapp/api/integrations/whatsapp/template-messages",
     )
-
-    # Text messages (CTA scheduling link, meeting link) MUST go to /messages.
-    # NMVE rejects text messages at /template-messages with validation error.
     if payload.get("type") == "text" or "templateName" not in payload:
         url = base_url.replace("/template-messages", "/messages")
     else:
         url = base_url
-
     api_key = (
         getattr(settings, "WHATSAPP_MESSAGE_API_KEY", "")
         or getattr(settings, "WHATSAPP_API_KEY", "")
         or os.getenv("WHATSAPP_MESSAGE_API_KEY", "")
         or os.getenv("WHATSAPP_API_KEY", "")
     )
-
     if not api_key:
         print(
             "WHATSAPP_MESSAGE_API_KEY (or WHATSAPP_API_KEY) is not configured for sending messages."
@@ -689,19 +320,16 @@ def _send_whatsapp_payload(
     # --------------------------------------------------
     # WHATSAPP TEST MODE SAFETY OVERRIDE
     # --------------------------------------------------
-
     if getattr(
         settings,
         "WHATSAPP_TEST_MODE",
         False,
     ):
-
         test_number = getattr(
             settings,
             "WHATSAPP_TEST_NUMBER",
             "",
-        )
-
+        )    
         if not test_number:
             print(
                 "WHATSAPP TEST MODE is enabled but "
@@ -722,9 +350,7 @@ def _send_whatsapp_payload(
             return False, None, None
 
         original_to = payload.get("to")
-
         payload["to"] = test_phone
-
         print(
             f"WHATSAPP TEST MODE: "
             f"{original_to} -> {test_phone}"
@@ -732,15 +358,12 @@ def _send_whatsapp_payload(
 
     # --------------------------------------------------
     # SEND PAYLOAD
-    # --------------------------------------------------
-
+    # -----------------------------------------------    
     data = json.dumps(payload).encode(
-        "utf-8"
+        "utf-8"   
     )
-
     headers = _whatsapp_headers()
     print(f"[WhatsApp] Sending to {payload.get('to')} using messaging key: {api_key[:14]}... on {url}")
-
     request = urllib.request.Request(
         url,
         data=data,
@@ -753,28 +376,22 @@ def _send_whatsapp_payload(
             request,
             timeout=30,
         ) as response:
-
             body = response.read().decode(
                 "utf-8",
                 errors="replace",
             )
-
             print(
                 f"WhatsApp API response status: "
                 f"{response.status}"
             )
-
             parsed = None
-
             if body.strip():
                 try:
                     parsed = json.loads(body)
-
                 except json.JSONDecodeError:
                     parsed = {
                         "raw_response": body
                     }
-
             return (
                 True,
                 parsed,
@@ -782,9 +399,7 @@ def _send_whatsapp_payload(
                     parsed
                 ),
             )
-
     except urllib.error.HTTPError as http_err:
-
         try:
             error_body = (
                 http_err.read()
@@ -793,12 +408,10 @@ def _send_whatsapp_payload(
                     errors="replace",
                 )
             )
-
         except Exception:
             error_body = str(
                 http_err
             )
-
         print(
             f"WhatsApp API HTTP Error: "
             f"{http_err.code}"
@@ -808,9 +421,7 @@ def _send_whatsapp_payload(
             f"Error Details: "
             f"{error_body}"
         )
-
         return False, None, None
-
     except Exception as error:
 
         print(
@@ -820,49 +431,20 @@ def _send_whatsapp_payload(
 
         return False, None, None
 
-
 def _send_whatsapp_to_candidate(
     db: Session,
     job_id: UUID,
     candidate_id: UUID,
     target_phone: str | None = None,
 ):
-    """Send the initial recruitment outreach WhatsApp template to a candidate.
-
-    Detailed Functionality:
-    - Queries Candidate and JobCandidate records from database.
-    - Resolves recipient phone number:
-      * Test Mode (`WHATSAPP_TEST_MODE=True`): Forced to `WHATSAPP_TEST_NUMBER` (blocks if missing).
-      * Staging Mode: If target is in `WHATSAPP_STAGE_NUMBERS`, directs to stage phone.
-      * Live Mode: Uses `candidate.phone`.
-    - Normalizes phone via `_clean_whatsapp_phone()`.
-    - Assembles dynamic template parameters (Candidate Name, Role Title, Company Name).
-    - Sends template payload via `_send_whatsapp_payload()`.
-    - On success:
-      * Records outbound contact entry in `candidate_contacts` table.
-      * Advances `JobCandidate.recruitment_status` from 'NEW'/'SHORTLISTED' to 'CONTACTED'.
-    - On failure: Logs error and returns False without breaking transaction.
-
-    Parameters:
-        db (Session): Active SQLAlchemy database session.
-        job_id (UUID): Job requisition ID.
-        candidate_id (UUID): Candidate ID.
-        target_phone (str | None): Optional phone override for testing.
-
-    Returns:
-        bool: True if message was successfully delivered by provider, False otherwise.
-    """
-
     print(
         f"--- Attempting WhatsApp Integration for candidate "
         f"{candidate_id} ---"
     )
-
     try:
         candidate = db.query(Candidate).filter(
             Candidate.id == candidate_id
         ).first()
-
         if not candidate:
             print(
                 "Candidate not found in DB."
@@ -875,7 +457,6 @@ def _send_whatsapp_to_candidate(
                 JobCandidate.candidate_id == candidate_id,
             )
         )
-
         if not job_candidate:
             print(
                 "JobCandidate not found."
@@ -885,7 +466,6 @@ def _send_whatsapp_to_candidate(
         # --------------------------------------------------
         # PHONE NUMBER
         # --------------------------------------------------
-
         if getattr(
             settings,
             "WHATSAPP_TEST_MODE",
@@ -896,13 +476,11 @@ def _send_whatsapp_to_candidate(
             # TEST MODE
             # NEVER USE CANDIDATE PHONE
             # --------------------------------------------------
-
             test_number = getattr(
                 settings,
                 "WHATSAPP_TEST_NUMBER",
                 "",
             )
-
             if not test_number:
                 print(
                     "WHATSAPP TEST MODE is enabled but "
@@ -930,29 +508,7 @@ def _send_whatsapp_to_candidate(
 
         else:
 
-            # --------------------------------------------------
-            # NORMAL PRODUCTION MODE
-            # EXISTING PHONE PRIORITY
-            # --------------------------------------------------
-
-            # raw_phone = target_phone
-
-            # if not raw_phone:
-            #     raw_phone = getattr(
-            #         settings,
-            #         "WHATSAPP_STAGE_NUMBER",
-            #         None,
-            #     )
-
-            # if not raw_phone:
-            #     raw_phone = (
-            #         str(candidate.phone)
-            #         if candidate.phone
-            #         else ""
-            #     )
-
             raw_phone = target_phone
-
             if not raw_phone:
                 if WHATSAPP_STAGE_NUMBERS:
                     random_index = random.randint(
@@ -1009,13 +565,9 @@ def _send_whatsapp_to_candidate(
         # WHATSAPP PAYLOAD
         # --------------------------------------------------
 
-        # Fetch the job title and company name for template body params
         job = db.get(Job, job_id)
         job_title = (job.title if job else None) or "the position"
         company_name = getattr(settings, "WHATSAPP_COMPANY_NAME", "the company")
-
-        # Build the template payload with bodyParams for candidate_shortlisted_outreach
-        # bodyParams: [candidate_name, role, company (1st), company (2nd)]
         payload = {
             "to": clean_phone,
             "templateName": template_name,
@@ -1034,7 +586,6 @@ def _send_whatsapp_to_candidate(
             f"Sending WhatsApp payload to "
             f"{clean_phone}..."
         )
-
         success, response_body, provider_message_id = (
             _send_whatsapp_payload(
                 payload
@@ -1047,7 +598,6 @@ def _send_whatsapp_to_candidate(
         # --------------------------------------------------
         # SAVE OUTBOUND MESSAGE
         # --------------------------------------------------
-
         contact = CandidateContact(
             job_candidate_id=job_candidate.id,
             channel="WHATSAPP",
@@ -1058,7 +608,6 @@ def _send_whatsapp_to_candidate(
             status="SENT",
             sent_at=datetime.now(ZoneInfo("Asia/Kolkata")).replace(tzinfo=None),
         )
-
         db.add(contact)
 
         # --------------------------------------------------
@@ -1073,7 +622,6 @@ def _send_whatsapp_to_candidate(
             job_candidate.recruitment_status = (
                 "CONTACTED"
             )
-
         db.commit()
 
         print(
@@ -1082,11 +630,8 @@ def _send_whatsapp_to_candidate(
         )
 
         return True
-
     except Exception as error:
-
         db.rollback()
-
         print(
             f"Error in WhatsApp integration: "
             f"{error}"
@@ -1099,20 +644,6 @@ def _send_whatsapp_text_message(
     raw_phone: str,
     text_message: str,
 ):
-    """Send a plain-text WhatsApp message through NMVE to a specific phone number.
-
-    Detailed Functionality:
-    - Normalizes raw recipient phone number via `_clean_whatsapp_phone()`.
-    - Constructs WhatsApp text message payload with `preview_url: True` to ensure links render as preview cards.
-    - Dispatches payload via `_send_whatsapp_payload()`.
-
-    Parameters:
-        raw_phone (str): Recipient phone number in arbitrary format.
-        text_message (str): Full text message string to deliver.
-
-    Returns:
-        bool: True if message was successfully dispatched, False otherwise.
-    """
     try:
 
         clean_phone = _clean_whatsapp_phone(
@@ -1160,22 +691,6 @@ def _send_whatsapp_cta_message(
     raw_phone: str,
     job_candidate_id: str,
 ):
-    """Send the interactive interview scheduling invitation (CTA) link to a candidate.
-
-    Detailed Functionality:
-    - Normalizes recipient phone number.
-    - Resolves public frontend domain (`FRONTEND_URL`), preventing localhost leakage.
-    - Constructs the candidate's unique booking URL: `{frontend_url}/schedule/{job_candidate_id}`.
-    - Formulates an engaging invitation message with helpful instructions to save contact if links are unclickable.
-    - Dispatches via `_send_whatsapp_text_message()`.
-
-    Parameters:
-        raw_phone (str): Candidate's WhatsApp phone number.
-        job_candidate_id (str): Unique JobCandidate schedule UUID.
-
-    Returns:
-        bool: True if delivery was initiated successfully, False otherwise.
-    """
     clean_phone = _clean_whatsapp_phone(
         raw_phone
     )
@@ -1192,10 +707,8 @@ def _send_whatsapp_cta_message(
         "https://nm-hire-xv-3-c4m5.vercel.app",
     ).rstrip("/")
 
-    # WhatsApp candidates cannot access localhost; always use public Vercel domain
     if not frontend_url or "localhost" in frontend_url or "127.0.0.1" in frontend_url:
         frontend_url = "https://nm-hire-xv-3-c4m5.vercel.app"
-
     scheduling_link = (
         f"{frontend_url}/schedule/{job_candidate_id}"
     )
@@ -1207,7 +720,6 @@ def _send_whatsapp_cta_message(
         "💡 *Note:* If the link above is not clickable, please save this number to your contacts or tap 'Add to contacts' at the top of the chat.\n\n"
         "We look forward to connecting with you! 😊"
     )
-
     return _send_whatsapp_text_message(
         clean_phone,
         text_message,
@@ -1234,18 +746,8 @@ def _phone_lookup_variants(
     raw_phone: str | None = None,
     clean_phone: str | None = None,
 ) -> list[str]:
-    """Build normalized and raw phone variants for database candidate matching.
-
-    Parameters:
-        raw_phone (str | None): Unformatted phone string from input or DB.
-        clean_phone (str | None): Validated 12-digit E.164 Indian mobile number.
-
-    Returns:
-        list[str]: Deduplicated non-empty phone strings for SQL `IN` lookups.
-    """
     variants: list[str] = []
     seen: set[str] = set()
-
     def _add(val: str | None) -> None:
         s = (val or "").strip()
         if s and s not in seen:
@@ -1254,7 +756,6 @@ def _phone_lookup_variants(
 
     _add(clean_phone)
     _add(raw_phone)
-
     if clean_phone and clean_phone.startswith("91") and len(clean_phone) == 12:
         local_10 = clean_phone[2:]
         _add(local_10)
@@ -1267,43 +768,24 @@ def _phone_lookup_variants(
 
     return variants
 
-
-def _find_matching_candidates(
+def _find_matching_candidates(#
     db: Session,
     raw_phone: str | None = None,
     clean_phone: str | None = None,
     email: str | None = None,
 ) -> list[Candidate]:
-    """Query the database for existing Candidate records matching phone OR email.
-
-    Enforces single-candidate identity resolution across phone variants and
-    case-insensitive trimmed email addresses.
-
-    Parameters:
-        db (Session): Active SQLAlchemy database session.
-        raw_phone (str | None): Raw phone input string.
-        clean_phone (str | None): Normalized 12-digit phone string.
-        email (str | None): Candidate email address.
-
-    Returns:
-        list[Candidate]: All matching Candidate ORM rows ordered with phone matches first.
-    """
     phone_variants = _phone_lookup_variants(raw_phone, clean_phone)
     clean_email = email.strip().lower() if email and email.strip() else None
-
     conditions = []
     if phone_variants:
         conditions.append(Candidate.phone.in_(phone_variants))
     if clean_email:
         conditions.append(func.lower(func.trim(Candidate.email)) == clean_email)
-
     if not conditions:
         return []
-
     matches = list(db.scalars(select(Candidate).where(or_(*conditions))).all())
     if len(matches) <= 1 or not phone_variants:
         return matches
-
     phone_set = set(phone_variants)
     matches.sort(key=lambda c: 0 if (c.phone or "").strip() in phone_set else 1)
     return matches
@@ -1313,22 +795,6 @@ def _candidates_have_contact_history(
     db: Session,
     candidate_ids: list[UUID],
 ) -> bool:
-    """Check database whether any matching candidate has prior outreach/contact history.
-
-    A candidate is considered already contacted across ALL jobs/roles if any linked
-    `JobCandidate` has:
-    1. Any row in `candidate_contacts` (including valid DELIVERED/SENT/READ, FAILED,
-       INVALID_PHONE, or RECEIVED), OR
-    2. A `recruitment_status` indicating an outreach attempt or post-outreach stage
-       (excludes only NEW, SHORTLISTED, and PENDING_OUTREACH).
-
-    Parameters:
-        db (Session): Active SQLAlchemy database session.
-        candidate_ids (list[UUID]): Candidate UUIDs matched by phone or email.
-
-    Returns:
-        bool: True if any prior contact/outreach attempt exists in DB, False otherwise.
-    """
     if not candidate_ids:
         return False
 
@@ -1358,19 +824,6 @@ def _candidate_has_contact_history(
     db: Session,
     candidate_id: UUID,
 ) -> bool:
-    """Check database globally whether a candidate (by ID, phone, or email) was contacted.
-
-    Resolves all Candidate records sharing the same phone variants or email address
-    and verifies whether any prior contact attempt (valid, failed, or invalid phone)
-    exists across all jobs.
-
-    Parameters:
-        db (Session): Active SQLAlchemy database session.
-        candidate_id (UUID): Candidate identifier.
-
-    Returns:
-        bool: True if the candidate has prior contact history in DB, False otherwise.
-    """
     candidate = db.get(Candidate, candidate_id)
     if not candidate:
         return False
@@ -1406,6 +859,7 @@ def _record_invalid_phone_contact(
     db.commit()
 
 
+
 def _upsert_candidate(
     db: Session,
     existing: Candidate | None,
@@ -1418,7 +872,6 @@ def _upsert_candidate(
     parsed_exp: Decimal | None = None,
     requisition_id: str = "",
 ) -> Candidate:
-    """Return existing Candidate enriched with missing fields, or create a new one."""
     if existing is None:
         candidate = Candidate(
             name=name,
@@ -1450,22 +903,6 @@ def _upsert_candidate(
 
 
 def _classify_whatsapp_response(message: str) -> str:
-    """Classify an inbound candidate WhatsApp reply into recruitment intent categories.
-
-    Classification Engine:
-    - Normalizes reply text to lower-case.
-    - Negative regex matching: detects phrases like 'not interested', 'no thanks', 'decline', 'not looking', 'no'.
-      Returns: 'NOT_INTERESTED'.
-    - Positive regex matching: detects phrases like 'yes', 'interested', 'sure', 'ok', 'okay', 'proceed', 'interview', 'schedule'.
-      Returns: 'INTERESTED'.
-    - Fallback: returns 'UNKNOWN' for ambiguous or conversational queries.
-
-    Parameters:
-        message (str): Candidate's inbound text message string.
-
-    Returns:
-        str: 'INTERESTED' | 'NOT_INTERESTED' | 'UNKNOWN'
-    """
     text_value = (message or "").strip().lower()
 
     negative_patterns = [
@@ -1475,9 +912,8 @@ def _classify_whatsapp_response(message: str) -> str:
         r"\bdon't want\b",
         r"\bdecline\b",
         r"\bnot looking\b",
-        r"\bno\b",
+        r"\bno\b",    
     ]
-
     for pattern in negative_patterns:
         if re.search(pattern, text_value):
             return "NOT_INTERESTED"
@@ -1492,11 +928,9 @@ def _classify_whatsapp_response(message: str) -> str:
         r"\binterview\b",
         r"\bschedule\b",
     ]
-
     for pattern in positive_patterns:
         if re.search(pattern, text_value):
-            return "INTERESTED"
-
+            return "INTERES    #if the reply doesn't belong to negative_patterns or positive_patterns the return unknownTED"
     return "UNKNOWN"
 
 
@@ -1504,45 +938,13 @@ def handle_whatsapp_webhook(
     db: Session,
     payload: dict,
 ) -> dict:
-    """Process an inbound NMVE WhatsApp webhook event and advance the recruitment pipeline.
-
-    Detailed Functionality:
-    1. Payload Extraction:
-       - Recursively traverses arbitrary nested JSON structures to extract sender phone number
-         and incoming text message (handles button clicks, interactive replies, plain text).
-    2. Number Sanitization & Matching:
-       - Cleans phone via `_clean_whatsapp_phone()`.
-       - Matches sender against Candidate and JobCandidate records across stages.
-    3. Conversation Logging:
-       - Inserts inbound communication log into `candidate_contacts` (`message_type="INBOUND"`).
-    4. Intent Classification & Workflow Execution:
-       - Runs NLP classifier `_classify_whatsapp_response()`.
-       - If 'INTERESTED':
-         * Updates status to 'INTERESTED'.
-         * Dispatches automated CTA scheduling link message (`_send_whatsapp_cta_message()`).
-         * Logs outbound CTA link message in `candidate_contacts`.
-       - If 'NOT_INTERESTED':
-         * Updates status to 'NOT_INTERESTED'.
-         * Sends polite opt-out acknowledgment text.
-       - If 'UNKNOWN':
-         * Updates status to 'REPLIED'.
-         * Sends friendly guidance prompt encouraging the candidate to reply YES to schedule.
-
-    Parameters:
-        db (Session): Active SQLAlchemy database session.
-        payload (dict): Raw JSON webhook payload received from NMVE WhatsApp provider.
-
-    Returns:
-        dict: Summary of webhook processing containing status intent, candidate ID, and message text.
-    """
-
     def find_value(data, keys):
         if isinstance(data, dict):
             for key in keys:
                 value = data.get(key)
                 if isinstance(value, (str, int, float)) and str(value).strip():
                     return str(value).strip()
-            for nested in data.values():
+
                 result = find_value(nested, keys)
                 if result:
                     return result
@@ -1551,13 +953,13 @@ def handle_whatsapp_webhook(
                 result = find_value(nested, keys)
                 if result:
                     return result
-        return None
+        return None    
 
     phone = _clean_whatsapp_phone(
         find_value(
             payload,
             ["to", "from", "phone", "sender", "wa_id", "waId", "phoneNumber", "fromNumber", "recipient_id"],
-        )
+        )    #extracts the text message from the payload
     )
 
     text_message = find_value(
@@ -1575,17 +977,18 @@ def handle_whatsapp_webhook(
             "selectedId",
         ],
     ) or ""
-
+    #"" means that if find_value() returns None or another falsy value, use an empty string instead.
+    #This extracts the reference ID associated with the WhatsApp message.
     reference_id = find_value(
         payload,
         ["referenceId", "reference_id", "reference"],
     )
-
+    #This searches for the message ID assigned by NMVE or WhatsApp.
     provider_message_id = find_value(
         payload,
         ["messageId", "message_id", "externalMessageId", "external_message_id", "id"],
     )
-
+    #Checks whether both the phone number and reference ID are missing.
     if not phone and not reference_id:
         return {
             "status": "IGNORED",
@@ -1593,9 +996,13 @@ def handle_whatsapp_webhook(
         }
 
     # Update CandidateContact on delivery status receipts (e.g. delivered, failed, read, sent)
+    #This checks whether the webhook has no usable message text.
     if not text_message or not text_message.strip():
+        #If payload["data"] is a dictionary, use that dictionary.
+        #Otherwise, use the complete payload
         data_dict = payload.get("data") if isinstance(payload.get("data"), dict) else payload
         status_val = (
+            #This searches for the delivery status using several possible field names.
             data_dict.get("status")
             or data_dict.get("deliveryStatus")
             or data_dict.get("messageStatus")
@@ -1604,27 +1011,48 @@ def handle_whatsapp_webhook(
             or payload.get("messageStatus")
             or ("failed" if (data_dict.get("errorCode") or data_dict.get("errorMessage") or payload.get("errorCode")) else None)
         )
+        #if no delivery status was found then the webhook contanis  an eventid string 
         if not status_val and isinstance(payload.get("eventId"), str):
+            #let eventid is eid = "status:wamid.example123:failed"
             eid = payload.get("eventId").lower()
+            #as per example the status is failed
+            #so status value is faild
+            #if in eventvalue there is something called delivered status would be delivered
+            #if in eventvalue there is something called sent status would be delivered
             if ":failed" in eid:
                 status_val = "failed"
             elif ":delivered" in eid:
                 status_val = "delivered"
             elif ":sent" in eid:
                 status_val = "sent"
-
+        #means a delivery status was found.
         if status_val:
             status_clean = str(status_val).strip().upper()
             target_contact = None
+            #Checks whether a provider message ID is available.
+            #Prepares a query to retrieve a CandidateContact object.
+            #Filters records to find the one whose stored external message ID matches the webhook message ID.
+            #Executes the query and returns the matching CandidateContact object, or None.
             if provider_message_id:
                 target_contact = db.scalar(
                     select(CandidateContact)
                     .where(CandidateContact.external_message_id == provider_message_id)
                     .limit(1)
                 )
+                #No matching contact was found yet.
+                #A reference ID exists.
+                #The reference ID starts with "NMHireX-".
             if not target_contact and reference_id and reference_id.startswith("NMHireX-"):
+                #Removes the prefix.
+                #example NMHireX-123e4567-e89b-12d3-a456-426614174000
+                #after strip 123e4567-e89b-12d3-a456-426614174000
                 ref_jc_id = reference_id.replace("NMHireX-", "").strip()
                 try:
+                    #converts the reference ID string into a UUID.
+                    #The query finds an outbound contact record associated with that JobCandidate.
+                    #.order_by(CandidateContact.created_at.desc()) sorts the records newest first.
+                    #.limit(1) retrieves the latest matching record.
+                    #try/except handles invalid UUID values without crashing the function.
                     target_contact = db.scalar(
                         select(CandidateContact)
                         .where(
@@ -1636,15 +1064,16 @@ def handle_whatsapp_webhook(
                     )
                 except (ValueError, TypeError):
                     target_contact = None
+                    #If the previous searches failed and a phone number exists, the function tries matching by phone.
             if not target_contact and phone:
                 raw_digits = "".join(filter(str.isdigit, phone))
                 target_contact = db.scalar(
-                    select(CandidateContact)
-                    .join(JobCandidate, JobCandidate.id == CandidateContact.job_candidate_id)
-                    .join(Candidate, Candidate.id == JobCandidate.candidate_id)
+                    select(CandidateContact)#retrieves contact records.
+                    .join(JobCandidate, JobCandidate.id == CandidateContact.job_candidate_id)#connects candidate-contacts to job-candidate records.
+                    .join(Candidate, Candidate.id == JobCandidate.candidate_id)#connects contacts to job-candidate records.
                     .where(
-                        (Candidate.phone == phone) | 
-                        (Candidate.phone == raw_digits) | 
+                        (Candidate.phone == phone) | #phone checks the normalized phone number.
+                        (Candidate.phone == raw_digits) | #raw_digits checks the digits-only number.
                         ((Candidate.phone.like(f"%{raw_digits[-10:]}")) if len(raw_digits) >= 10 else (Candidate.phone == phone)),
                         CandidateContact.message_type == "OUTBOUND"
                     )
@@ -1715,7 +1144,6 @@ def handle_whatsapp_webhook(
             "reason": "Empty message body or delivery status receipt",
         }
 
-    # First try the reference ID generated by NM-HireX.
     job_candidate = None
     if reference_id:
         candidate_prefix = "NMHireX-"
@@ -1729,7 +1157,6 @@ def handle_whatsapp_webhook(
     print(f"WEBHOOK EXTRACTED PHONE: {phone}")
     print(f"WEBHOOK EXTRACTED TEXT: {text_message}")
 
-    # Fall back to the latest active candidate record for the phone number.
     if job_candidate is None and phone:
         job_candidate = db.execute(
             select(JobCandidate)

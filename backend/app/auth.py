@@ -165,30 +165,3 @@ def get_current_user(
         )
 
     return user
-
-
-def require_admin(
-    user: User = Depends(get_current_user),
-) -> User:
-    """FastAPI authorization dependency ensuring the current user has the 'ADMIN' role.
-
-    Detailed Functionality:
-    - Depends on `get_current_user` to ensure user is authenticated and active.
-    - Verifies that `user.role == "ADMIN"`.
-    - Blocks recruiters or standard users from accessing administrative resources.
-
-    Parameters:
-        user (User): Authenticated user injected from `get_current_user`.
-
-    Returns:
-        User: Authenticated administrator User instance.
-
-    Raises:
-        HTTPException(403): If user does not have the 'ADMIN' role.
-    """
-    if user.role != "ADMIN":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Admin access required",
-        )
-    return user

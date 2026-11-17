@@ -39,7 +39,6 @@ from .auth import (
     create_access_token,
     get_current_user,
     hash_password,
-    require_admin,
     verify_password,
 )
 from .config import settings
@@ -47,8 +46,6 @@ from .database import get_db
 from .models import Job, JobCandidate, User
 from .tools_function import (
     _find_matching_candidates,
-    get_admin_job_candidates,
-    get_admin_jobs,
     get_job_candidates,
     get_outreach_candidates,
     get_user_dashboard,
@@ -595,36 +592,6 @@ def api_user_candidates(
         return get_user_job_candidates(db, user.id, job_id)
     except PermissionError:
         raise HTTPException(status_code=403, detail="Not your job")
-
-
-@router.get("/admin/jobs")
-def api_admin_jobs(
-    admin: User = Depends(require_admin),
-    db: Session = Depends(get_db),
-):
-    """Admin-only endpoint listing all jobs across the platform with recruiter metadata.
-
-    Returns:
-        list[dict]: Global job catalog with uploader information and candidate previews.
-    """
-    return get_admin_jobs(db)
-
-
-@router.get("/admin/jobs/{job_id}/candidates")
-def api_admin_candidates(
-    job_id: UUID,
-    admin: User = Depends(require_admin),
-    db: Session = Depends(get_db),
-):
-    """Admin-only endpoint listing candidates for any job in the system without ownership checks.
-
-    Returns:
-        list[dict]: Ranked candidate profiles.
-    """
-    try:
-        return get_admin_job_candidates(db, job_id)
-    except ValueError:
-        raise HTTPException(status_code=404, detail="Job not found")
 
 
 @router.get("/user/dashboard")

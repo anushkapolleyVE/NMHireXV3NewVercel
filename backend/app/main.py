@@ -59,6 +59,7 @@ cors_origins = [
     "https://nm-hire-x.vercel.app",
     "https://nm-hire-x-omega.vercel.app",
     "https://nm-hire-xv-2new.vercel.app",
+    "https://nmhirexv3.vestaging.in"
 ]
 if settings.FRONTEND_URL and settings.FRONTEND_URL not in cors_origins:
     cors_origins.append(settings.FRONTEND_URL.rstrip("/"))
