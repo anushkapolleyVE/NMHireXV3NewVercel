@@ -26,5 +26,10 @@ services:
         value: en
       - key: WHATSAPP_COMPANY_NAME
         value: Acme
+
       - key: WHATSAPP_TEST_MODE
         value: "false"
+
+
+
+
