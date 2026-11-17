@@ -930,7 +930,8 @@ def _classify_whatsapp_response(message: str) -> str:
     ]
     for pattern in positive_patterns:
         if re.search(pattern, text_value):
-            return "INTERES    #if the reply doesn't belong to negative_patterns or positive_patterns the return unknownTED"
+            return "INTERESTED"
+    # if the reply doesn't belong to negative_patterns or positive_patterns the return unknown
     return "UNKNOWN"
 
 
@@ -944,10 +945,11 @@ def handle_whatsapp_webhook(
                 value = data.get(key)
                 if isinstance(value, (str, int, float)) and str(value).strip():
                     return str(value).strip()
-
-                result = find_value(nested, keys)
-                if result:
-                    return result
+            for nested in data.values():
+                if isinstance(nested, (dict, list)):
+                    result = find_value(nested, keys)
+                    if result:
+                        return result
         elif isinstance(data, list):
             for nested in data:
                 result = find_value(nested, keys)
