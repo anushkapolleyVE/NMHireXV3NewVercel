@@ -169,7 +169,7 @@ cors_origins = [
     "https://nm-hire-xv-2new.vercel.app",
     "https://nmhirexv3.vestaging.in",
     "https://nm-hire-xv-3-c4m5.vercel.app",
-    "https://nm-hire-xv-3-new-vercel.vercel.app/",
+    "https://nm-hire-xv-3-new-vercel.vercel.app",
 ]
 
 # Add the frontend URL from Render environment variables
